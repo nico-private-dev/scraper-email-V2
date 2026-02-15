@@ -548,8 +548,15 @@ def main(argv: Optional[List[str]] = None):
 
     duration = time.time() - start_time
 
-    # Apply campaign filtering
+    # Save raw (unfiltered) CSV before filtering
     raw_count = len(all_emails)
+    if not args.dry_run and all_emails:
+        output_path = Path(args.output)
+        raw_path = str(output_path.with_stem(output_path.stem + "_raw"))
+        save_csv(all_emails, raw_path, gmb_metadata)
+        print(f"\nRaw emails saved to: {raw_path} ({raw_count} emails)")
+
+    # Apply campaign filtering
     if not args.no_filter and not args.dry_run:
         all_emails = filter_results(
             all_emails,
@@ -573,7 +580,7 @@ def main(argv: Optional[List[str]] = None):
     print(f"{'=' * 60}")
 
     if not args.dry_run:
-        # Save CSV (with GMB metadata if in GMB mode)
+        # Save filtered CSV (with GMB metadata if in GMB mode)
         save_csv(all_emails, args.output, gmb_metadata)
 
         # Save JSON if requested
