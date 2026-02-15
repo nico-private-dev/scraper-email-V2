@@ -461,6 +461,12 @@ def main(argv: Optional[List[str]] = None):
         logger.error("--location is required when using --gmb")
         sys.exit(1)
 
+    # GMB mode: default to allowing free emails (small businesses often use gmail/orange)
+    if args.gmb and not args.allow_free_emails:
+        args.allow_free_emails = True
+        print("Note: --allow-free-emails activé par défaut en mode GMB "
+              "(les petits commerces utilisent souvent gmail/orange/hotmail)")
+
     # --- Collect URLs ---
     gmb_metadata: Optional[Dict[str, dict]] = None
 
