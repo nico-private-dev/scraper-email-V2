@@ -3,6 +3,7 @@
 import argparse
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -124,21 +125,34 @@ def deduplicate_urls(urls: List[str]) -> List[str]:
     return deduped
 
 
-def save_csv(results: List[EmailResult], output_path: str):
-    """Save results to CSV."""
+def save_csv(results: List[EmailResult], output_path: str,
+             gmb_metadata: Optional[Dict[str, dict]] = None):
+    """Save results to CSV, with optional GMB business metadata."""
     if not results:
         logger.warning("No emails found - creating empty output file")
-        df = pd.DataFrame(columns=["url", "email", "source_page", "confidence_score"])
+        cols = ["url", "email", "source_page", "confidence_score"]
+        if gmb_metadata is not None:
+            cols.extend(["business_name", "address", "phone", "rating", "category"])
+        df = pd.DataFrame(columns=cols)
     else:
-        df = pd.DataFrame([
-            {
+        rows = []
+        for r in results:
+            row = {
                 "url": r.url,
                 "email": r.email,
                 "source_page": r.source_page,
                 "confidence_score": r.confidence_score,
             }
-            for r in results
-        ])
+            if gmb_metadata is not None:
+                domain = _extract_root_domain(r.url)
+                meta = gmb_metadata.get(domain, {})
+                row["business_name"] = meta.get("business_name", "")
+                row["address"] = meta.get("address", "")
+                row["phone"] = meta.get("phone", "")
+                row["rating"] = meta.get("rating", "")
+                row["category"] = meta.get("category", "")
+            rows.append(row)
+        df = pd.DataFrame(rows)
 
     df.to_csv(output_path, index=False, encoding="utf-8-sig")
     logger.info("Results saved to %s (%d rows)", output_path, len(df))
@@ -179,28 +193,79 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(
         prog="email-scraper",
-        description="Extract emails from URLs listed in a CSV file.",
+        description="Extract emails from URLs (CSV file or Google Maps search).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Mode CSV (from URL list)
   %(prog)s -i urls.csv -o results.csv
-  %(prog)s -i urls.csv -o results.csv -t 4 --timeout 20 -vv
-  %(prog)s -i urls.csv -o results.csv --json results.json --cache .cache
-  %(prog)s -i urls.csv -o results.csv --dry-run -v
-  %(prog)s -i urls.csv -o results.csv --webhook https://hooks.example.com/notify
+  %(prog)s -i urls.csv -o results.csv -t 4 --no-robots -vv
+
+  # Mode GMB (from Google Maps search)
+  %(prog)s --gmb "cabinet comptable" --location "Paris" -o results.csv
+  %(prog)s --gmb "plombier" --location "Lyon" -o results.csv --radius 15 -t 4
+  %(prog)s --gmb "restaurant" --location "Marseille" -o results.csv --api-quota 50 -v
         """,
     )
 
-    parser.add_argument(
+    # --- Input source ---
+    source = parser.add_argument_group("input source (choose one)")
+    source.add_argument(
         "-i", "--input",
-        required=True,
+        type=str,
+        default=None,
         help="Input CSV file with a 'url' column",
     )
+    source.add_argument(
+        "--gmb",
+        type=str,
+        default=None,
+        metavar="QUERY",
+        help="Search Google Maps for businesses (e.g., \"cabinet comptable\")",
+    )
+
+    # --- GMB options ---
+    gmb_group = parser.add_argument_group("GMB options (used with --gmb)")
+    gmb_group.add_argument(
+        "--location",
+        type=str,
+        default=None,
+        help="City or area to search (e.g., \"Paris\", \"Lyon 3ème\")",
+    )
+    gmb_group.add_argument(
+        "--api-key",
+        type=str,
+        default=None,
+        help="Google Places API key (or set GOOGLE_PLACES_API_KEY env var)",
+    )
+    gmb_group.add_argument(
+        "--radius",
+        type=float,
+        default=10.0,
+        help="Search radius in km (default: 10). Larger = more API requests",
+    )
+    gmb_group.add_argument(
+        "--gmb-max",
+        type=int,
+        default=0,
+        help="Max businesses to collect from GMB (default: 0 = all found)",
+    )
+    gmb_group.add_argument(
+        "--api-quota",
+        type=int,
+        default=100,
+        help="Max API requests allowed per run (default: 100 = ~$3.50). "
+             "Safety limit to stay within the free $200/month credit",
+    )
+
+    # --- Output ---
     parser.add_argument(
         "-o", "--output",
         required=True,
         help="Output CSV file path",
     )
+
+    # --- Scraping options ---
     parser.add_argument(
         "-t", "--threads",
         type=int,
@@ -238,6 +303,8 @@ Examples:
         default=None,
         help="Webhook URL for completion notification (optional)",
     )
+
+    # --- Filtering options ---
     parser.add_argument(
         "--min-score",
         type=float,
@@ -304,6 +371,77 @@ Examples:
     return parser
 
 
+def _collect_gmb_urls(args) -> tuple:
+    """Run GMB collection and return (urls, gmb_metadata).
+
+    Returns:
+        Tuple of (list of URL strings, dict mapping domain to business metadata)
+    """
+    from .gmb import GMBCollector, QuotaExceededError, COST_PER_REQUEST
+
+    # Resolve API key
+    api_key = args.api_key or os.environ.get("GOOGLE_PLACES_API_KEY")
+    if not api_key:
+        logger.error(
+            "Google Places API key required. "
+            "Use --api-key KEY or set GOOGLE_PLACES_API_KEY env var."
+        )
+        sys.exit(1)
+
+    # Show quota info
+    max_cost = args.api_quota * COST_PER_REQUEST
+    print(f"GMB mode: searching Google Maps for \"{args.gmb}\" in \"{args.location}\"")
+    print(f"  API quota: {args.api_quota} requests (max ~${max_cost:.2f})")
+    print(f"  Search radius: {args.radius}km")
+    if args.gmb_max > 0:
+        print(f"  Max businesses: {args.gmb_max}")
+    print()
+
+    collector = GMBCollector(
+        api_key=api_key,
+        max_requests=args.api_quota,
+    )
+
+    result = collector.collect(
+        query=args.gmb,
+        location=args.location,
+        radius_km=args.radius,
+        max_results=args.gmb_max,
+    )
+
+    # GMB summary
+    print(f"{'=' * 60}")
+    print(f"GMB collection complete")
+    print(f"{'=' * 60}")
+    print(f"  Businesses found:  {len(result.businesses)} (with website)")
+    print(f"  API requests used: {result.total_api_requests}/{args.api_quota}")
+    print(f"  Estimated cost:    ${result.estimated_cost:.2f}")
+    if result.errors:
+        print(f"  Errors:            {len(result.errors)}")
+    print(f"{'=' * 60}\n")
+
+    if not result.businesses:
+        logger.warning("No businesses with websites found on Google Maps")
+        return [], {}
+
+    # Build URL list and metadata dict (keyed by domain for matching)
+    urls = []
+    gmb_metadata: Dict[str, dict] = {}
+    for biz in result.businesses:
+        urls.append(biz.url)
+        domain = _extract_root_domain(biz.url)
+        gmb_metadata[domain] = {
+            "business_name": biz.business_name,
+            "address": biz.address,
+            "phone": biz.phone,
+            "rating": biz.rating if biz.rating is not None else "",
+            "category": biz.category,
+        }
+
+    logger.info("Collected %d URLs from Google Maps", len(urls))
+    return urls, gmb_metadata
+
+
 def main(argv: Optional[List[str]] = None):
     """Main entry point."""
     parser = build_parser()
@@ -312,14 +450,37 @@ def main(argv: Optional[List[str]] = None):
     # Setup logging
     setup_logging(args.verbose, args.log_file)
 
-    # Load URLs and deduplicate by domain
-    urls = load_urls(args.input)
+    # --- Validate input source ---
+    if args.gmb and args.input:
+        logger.error("Cannot use both -i/--input and --gmb. Choose one input source.")
+        sys.exit(1)
+    if not args.gmb and not args.input:
+        logger.error("An input source is required: -i FILE or --gmb QUERY")
+        sys.exit(1)
+    if args.gmb and not args.location:
+        logger.error("--location is required when using --gmb")
+        sys.exit(1)
+
+    # --- Collect URLs ---
+    gmb_metadata: Optional[Dict[str, dict]] = None
+
+    if args.gmb:
+        # GMB mode: collect from Google Maps
+        urls, gmb_metadata = _collect_gmb_urls(args)
+        if not urls:
+            save_csv([], args.output, gmb_metadata)
+            return 0
+    else:
+        # CSV mode: load from file
+        urls = load_urls(args.input)
+
     if not urls:
         logger.error("No URLs to process")
         sys.exit(1)
+
     urls = deduplicate_urls(urls)
 
-    # Create scraper
+    # --- Scrape emails from collected URLs ---
     scraper_kwargs = {
         "timeout": args.timeout,
         "respect_robots": not args.no_robots,
@@ -337,7 +498,7 @@ def main(argv: Optional[List[str]] = None):
     def _checkpoint_save():
         """Save raw (unfiltered) emails to output CSV as crash recovery."""
         if all_emails and not args.dry_run:
-            save_csv(all_emails, args.output)
+            save_csv(all_emails, args.output, gmb_metadata)
             logger.info(
                 "Checkpoint: saved %d raw emails after %d/%d URLs",
                 len(all_emails), urls_processed, len(urls),
@@ -412,8 +573,8 @@ def main(argv: Optional[List[str]] = None):
     print(f"{'=' * 60}")
 
     if not args.dry_run:
-        # Save CSV
-        save_csv(all_emails, args.output)
+        # Save CSV (with GMB metadata if in GMB mode)
+        save_csv(all_emails, args.output, gmb_metadata)
 
         # Save JSON if requested
         if args.json_output:

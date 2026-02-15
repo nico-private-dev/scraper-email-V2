@@ -2,7 +2,11 @@
 
 ## Project Overview
 
-**scraper-email-V2** est un scraper CLI Python qui extrait les emails de contact depuis une liste d'URLs fournie en CSV. Il est conçu pour les campagnes B2B : il filtre automatiquement les emails inutiles (agences web, DPO, noreply, fournisseurs d'email gratuits) et garde le meilleur email par site.
+**scraper-email-V2** est un scraper CLI Python qui extrait les emails de contact pour les campagnes B2B. Deux modes d'entrée :
+1. **Mode CSV** : à partir d'une liste d'URLs dans un fichier CSV
+2. **Mode GMB** : à partir d'une recherche Google Maps (mot-clé + localisation) via l'API Google Places
+
+Il filtre automatiquement les emails inutiles (agences web, DPO, noreply, fournisseurs d'email gratuits) et garde le meilleur email par site.
 
 **Repository** : `nico-private-dev/scraper-email-V2`
 
@@ -23,7 +27,8 @@ scraper-email-V2/
     ├── detector.py              # Détection des pages contact/legal/about depuis la homepage
     ├── extractor.py             # Extraction email : regex, mailto, désobfuscation, validation
     ├── scorer.py                # Score de confiance (0.0–1.0) pour chaque email
-    └── filter.py                # Filtrage campagne B2B (domaine, rôle, free email, etc.)
+    ├── filter.py                # Filtrage campagne B2B (domaine, rôle, free email, etc.)
+    └── gmb.py                   # Collecte URLs business via Google Places API (mode GMB)
 ```
 
 ## Installation
@@ -42,7 +47,7 @@ pip install -e .
 
 ## Utilisation
 
-### Commande de base
+### Mode CSV (depuis une liste d'URLs)
 
 ```bash
 python -m email_scraper -i urls.csv -o results.csv
@@ -50,58 +55,89 @@ python -m email_scraper -i urls.csv -o results.csv
 
 Le CSV d'entrée doit avoir une colonne nommée `url`, `urls`, `website`, `site` ou `link`.
 
-### Options CLI complètes
+### Mode GMB (depuis Google Maps)
 
 ```bash
-python -m email_scraper \
-  -i urls.csv          # CSV d'entrée avec colonne URL (requis)
-  -o results.csv       # CSV de sortie (requis)
-  -t 4                 # Nombre de threads parallèles (défaut: 1)
-  --timeout 20         # Timeout HTTP en secondes (défaut: 15)
-  --rate-limit 1.0     # Délai min entre requêtes au même domaine (défaut: 1.0s)
-  --cache .cache       # Répertoire cache pour pages HTML (optionnel)
-  --json results.json  # Export JSON en plus du CSV (optionnel)
-  --min-score 0.7      # Score de confiance minimum (défaut: 0.7)
-  --max-per-site 1     # Max emails gardés par site (défaut: 1, 0 = illimité)
-  --no-filter          # Désactive tous les filtres campagne
-  --allow-free-emails  # Garde les emails gmail, orange, free, etc.
-  --no-robots          # Ignore robots.txt
-  --dry-run            # Détecte les pages sans extraire (mode test)
-  --user-agent "..."   # User-Agent custom
-  --save-every 100     # Checkpoint brut tous les N URLs (défaut: 100)
-  --webhook URL        # Notification webhook à la fin
-  --log-file scrape.log # Sauvegarder les logs dans un fichier
-  -v                   # Verbosité INFO
-  -vv                  # Verbosité DEBUG
+python -m email_scraper --gmb "cabinet comptable" --location "Paris" -o results.csv
 ```
+
+Nécessite une clé API Google Places (`--api-key` ou env var `GOOGLE_PLACES_API_KEY`).
 
 ### Exemples concrets
 
 ```bash
-# Scraping simple
+# --- Mode CSV ---
 python -m email_scraper -i urls.csv -o results.csv
-
-# Scraping rapide multi-thread, ignorer robots.txt
 python -m email_scraper -i urls.csv -o results.csv -t 4 --no-robots
-
-# Garder les emails free (gmail, orange...) — utile pour sites Solocal/Wix
 python -m email_scraper -i urls.csv -o results.csv --no-robots --allow-free-emails
-
-# Mode debug complet avec logs fichier
-python -m email_scraper -i urls.csv -o results.csv -vv --log-file scrape.log
-
-# Mode test : voir les pages détectées sans scraper
 python -m email_scraper -i urls.csv -o results.csv --dry-run -v
 
-# Tout garder, pas de filtre
-python -m email_scraper -i urls.csv -o results.csv --no-filter --no-robots
+# --- Mode GMB ---
+# Recherche basique
+python -m email_scraper --gmb "cabinet comptable" --location "Paris" -o results.csv
+
+# Avec multi-thread et rayon élargi
+python -m email_scraper --gmb "plombier" --location "Lyon" -o results.csv --radius 15 -t 4
+
+# Limiter le quota API (sécurité budget)
+python -m email_scraper --gmb "restaurant" --location "Marseille" -o results.csv --api-quota 50
+
+# Limiter le nombre de business collectés
+python -m email_scraper --gmb "avocat" --location "Bordeaux" -o results.csv --gmb-max 30
 ```
 
+### Options CLI complètes
+
+**Source d'entrée (choisir un) :**
+
+| Option | Description |
+|--------|-------------|
+| `-i, --input FILE` | CSV d'entrée avec colonne URL |
+| `--gmb QUERY` | Recherche Google Maps (ex: "cabinet comptable") |
+
+**Options GMB (avec `--gmb`) :**
+
+| Option | Description | Défaut |
+|--------|-------------|--------|
+| `--location` | Ville/zone (requis avec --gmb) | — |
+| `--api-key` | Clé API Google Places (ou env `GOOGLE_PLACES_API_KEY`) | — |
+| `--radius` | Rayon de recherche en km | `10` |
+| `--gmb-max` | Nombre max de business à collecter (0 = tout) | `0` |
+| `--api-quota` | Limite de requêtes API par exécution (sécurité budget) | `100` (~3.50$) |
+
+**Options scraping et filtrage :**
+
+| Option | Description | Défaut |
+|--------|-------------|--------|
+| `-t, --threads` | Threads parallèles | `1` |
+| `--timeout` | Timeout HTTP (secondes) | `15` |
+| `--rate-limit` | Délai entre requêtes au même domaine | `1.0` |
+| `--cache` | Répertoire cache HTML | désactivé |
+| `--json` | Export JSON additionnel | désactivé |
+| `--min-score` | Score de confiance minimum | `0.7` |
+| `--max-per-site` | Max emails par site (0 = illimité) | `1` |
+| `--no-filter` | Désactive les filtres campagne | `False` |
+| `--allow-free-emails` | Garde les emails free (gmail, etc.) | `False` |
+| `--no-robots` | Ignore robots.txt | `False` |
+| `--dry-run` | Mode test sans extraction | `False` |
+| `--save-every` | Checkpoint brut tous les N URLs | `100` |
+| `--webhook` | URL webhook notification | désactivé |
+| `--log-file` | Fichier de log | désactivé |
+| `-v, -vv` | Verbosité (INFO, DEBUG) | WARNING |
+
 ### Format CSV de sortie
+
+Mode CSV :
 
 | url | email | source_page | confidence_score |
 |-----|-------|-------------|-----------------|
 | https://example.com | contact@example.com | https://example.com/contact | 0.85 |
+
+Mode GMB (colonnes enrichies) :
+
+| url | email | source_page | confidence_score | business_name | address | phone | rating | category |
+|-----|-------|-------------|-----------------|---------------|---------|-------|--------|----------|
+| https://cabinet-dupont.fr | contact@cabinet-dupont.fr | .../contact | 0.85 | Cabinet Dupont | 12 rue de Rivoli, 75001 Paris | 01 42 33 44 55 | 4.5 | Comptable |
 
 ### Entry point installé
 
@@ -160,11 +196,45 @@ URL d'entrée
 | `extractor.py` | `extract_emails()` : regex, mailto, désobfuscation, `clean_email()`, `validate_email()` |
 | `scorer.py` | `compute_confidence()` : score 0.0–1.0 multi-facteurs |
 | `filter.py` | `filter_results()` : filtrage B2B, `is_campaign_worthy()`, sélection best-per-site |
+| `gmb.py` | `GMBCollector` : Google Places API, quadrillage zones, pagination, quota tracking |
 
 ### Dataclasses
 
 - **`EmailResult`** (`scraper.py`) : `url`, `email`, `source_page`, `confidence_score`, `source_type`, `page_type`
 - **`ScrapeResult`** (`scraper.py`) : `input_url`, `emails: List[EmailResult]`, `pages_scraped`, `errors`
+- **`BusinessResult`** (`gmb.py`) : `place_id`, `business_name`, `url`, `address`, `phone`, `rating`, `review_count`, `category`
+- **`GMBCollectResult`** (`gmb.py`) : `businesses: List[BusinessResult]`, `total_api_requests`, `estimated_cost`, `errors`
+
+## Mode GMB — Détails techniques
+
+### Google Places API (New)
+
+Le module `gmb.py` utilise l'endpoint Text Search de la Places API (New) :
+- `POST https://places.googleapis.com/v1/places:searchText`
+- Coût par requête : ~0.035$ (Text Search + champs Contact)
+- Crédit gratuit : 200$/mois (~5 700 requêtes)
+- Pagination : max 3 pages de 20 résultats = 60 résultats par query
+
+### Quadrillage automatique
+
+Pour contourner le cap de 60 résultats/query, le collecteur découpe la zone en cercles :
+- `--radius <= 5km` : 1 seul cercle (centre de la zone)
+- `--radius > 5km` : grille de cercles de 3km avec chevauchement
+- Exemple Paris (10km) : ~12 cercles → jusqu'à 720 résultats uniques
+- Déduplication par `place_id` (un business dans 2 cercles = 1 seul résultat)
+
+### Quota et sécurité budget
+
+Le quota (`--api-quota`, défaut 100) est une **limite dure** : le collecteur s'arrête immédiatement quand il est atteint. Il affiche le coût estimé avant et après la collecte.
+
+| Quota | Coût max | Résultats max estimés |
+|-------|----------|----------------------|
+| 50 | ~1.75$ | ~1 000 |
+| 100 (défaut) | ~3.50$ | ~2 000 |
+| 500 | ~17.50$ | ~10 000 |
+| 5 700 | ~200$ | ~toute la ville |
+
+La clé API peut être passée via `--api-key` ou la variable d'environnement `GOOGLE_PLACES_API_KEY`.
 
 ## Points importants pour les modifications
 
