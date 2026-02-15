@@ -1,6 +1,10 @@
 # Email Scraper
 
-Outil CLI Python pour extraire des adresses email de contact à partir d'URLs listées dans un fichier CSV. Conçu pour les campagnes B2B : filtre automatiquement les emails inutiles (agences web, DPO, noreply, fournisseurs gratuits) et garde le meilleur email par site.
+Outil CLI Python pour extraire des adresses email de contact pour les campagnes B2B. Deux modes d'entrée :
+- **Mode CSV** : à partir d'une liste d'URLs dans un fichier CSV
+- **Mode GMB** : à partir d'une recherche Google Maps (mot-clé + localisation) via l'API Google Places
+
+Filtre automatiquement les emails inutiles (agences web, DPO, noreply, fournisseurs gratuits) et garde le meilleur email par site.
 
 ## Fonctionnalités
 
@@ -15,6 +19,9 @@ Outil CLI Python pour extraire des adresses email de contact à partir d'URLs li
 - **Cache** : évite le re-scraping avec un cache local
 - **Export dual** : CSV + JSON (métadonnées complètes)
 - **Parallélisation** : multi-thread avec `concurrent.futures`
+- **Mode GMB** : recherche Google Maps par mot-clé + localisation, collecte les URLs et métadonnées business
+- **Quadrillage automatique** : découpe les zones larges en cercles pour dépasser le cap de 60 résultats Google
+- **Sécurité budget** : quota API configurable pour rester dans le crédit gratuit (200$/mois)
 - **Mode dry-run** : teste la détection de pages sans scraper
 - **Webhook** : notification optionnelle en fin de scraping
 
@@ -34,7 +41,7 @@ pip install -e .
 
 ## Utilisation
 
-### Format CSV d'entrée
+### Mode CSV (depuis une liste d'URLs)
 
 Le fichier CSV doit contenir une colonne `url` (ou `urls`, `website`, `site`, `link`) :
 
@@ -45,94 +52,106 @@ https://another-site.com
 mon-site.fr
 ```
 
-Les URLs sont automatiquement normalisées (ajout `https://`) et dédupliquées par domaine racine.
-
-### Commandes
-
-**Scraping simple :**
-
 ```bash
 python -m email_scraper -i urls.csv -o results.csv
-```
-
-**Multi-thread rapide, ignorer robots.txt :**
-
-```bash
 python -m email_scraper -i urls.csv -o results.csv -t 4 --no-robots
-```
-
-**Garder les emails free (gmail, orange...) — utile pour sites Solocal/Wix :**
-
-```bash
 python -m email_scraper -i urls.csv -o results.csv --no-robots --allow-free-emails
 ```
 
-**Mode debug complet avec logs fichier :**
+### Mode GMB (depuis Google Maps)
+
+Recherche des business sur Google Maps par mot-clé + localisation, collecte leurs URLs de site web, puis scrape les emails.
+
+**Prérequis** : clé API Google Places (New). [Créer une clé](https://console.cloud.google.com/apis/credentials) et activer l'API "Places API (New)". Crédit gratuit : 200$/mois.
 
 ```bash
-python -m email_scraper -i urls.csv -o results.csv -vv --log-file scrape.log
+# Recherche basique
+python -m email_scraper --gmb "cabinet comptable" --location "Paris" -o results.csv
+
+# Clé API via argument ou variable d'environnement
+python -m email_scraper --gmb "plombier" --location "Lyon" -o results.csv --api-key "AIza..."
+export GOOGLE_PLACES_API_KEY="AIza..."
+python -m email_scraper --gmb "plombier" --location "Lyon" -o results.csv
+
+# Rayon élargi + multi-thread
+python -m email_scraper --gmb "plombier" --location "Lyon" -o results.csv --radius 15 -t 4
+
+# Limiter le quota API (sécurité budget)
+python -m email_scraper --gmb "restaurant" --location "Marseille" -o results.csv --api-quota 50
+
+# Limiter le nombre de business collectés
+python -m email_scraper --gmb "avocat" --location "Bordeaux" -o results.csv --gmb-max 30
 ```
 
-**Mode dry-run (détecte les pages sans extraire) :**
+#### Sécurité budget
 
-```bash
-python -m email_scraper -i urls.csv -o results.csv --dry-run -v
-```
+Le quota API (`--api-quota`, défaut 100) est une **limite dure** : le scraper s'arrête quand il est atteint. Le coût est affiché avant et après.
 
-**Tout garder, pas de filtre :**
+| Quota | Coût max | Résultats max |
+|-------|----------|---------------|
+| 50 | ~1.75$ | ~1 000 |
+| **100** (défaut) | **~3.50$** | **~2 000** |
+| 500 | ~17.50$ | ~10 000 |
 
-```bash
-python -m email_scraper -i urls.csv -o results.csv --no-filter --no-robots
-```
-
-**Avec cache, JSON et webhook :**
-
-```bash
-python -m email_scraper -i urls.csv -o results.csv \
-  -t 4 --no-robots \
-  --cache .cache \
-  --json results.json \
-  --webhook https://hooks.example.com/notify \
-  -vv
-```
-
-Si installé via `pip install -e .` :
-
-```bash
-email-scraper -i urls.csv -o results.csv -t 4 --no-robots
-```
+Avec le crédit gratuit de 200$/mois, tu peux faire ~5 700 requêtes/mois sans payer.
 
 ### Options CLI
 
+**Source d'entrée (choisir un) :**
+
+| Option | Description |
+|--------|-------------|
+| `-i, --input FILE` | CSV d'entrée avec colonne URL |
+| `--gmb QUERY` | Recherche Google Maps (ex: `"cabinet comptable"`) |
+
+**Options GMB :**
+
 | Option | Description | Défaut |
 |--------|-------------|--------|
-| `-i, --input` | Fichier CSV d'entrée (requis) | — |
-| `-o, --output` | Fichier CSV de sortie (requis) | — |
-| `-t, --threads` | Nombre de threads parallèles | `1` |
+| `--location` | Ville/zone (requis avec `--gmb`) | — |
+| `--api-key` | Clé API Google Places (ou env `GOOGLE_PLACES_API_KEY`) | — |
+| `--radius` | Rayon de recherche en km | `10` |
+| `--gmb-max` | Max business à collecter (`0` = tout) | `0` |
+| `--api-quota` | Limite de requêtes API par exécution | `100` |
+
+**Options scraping et filtrage :**
+
+| Option | Description | Défaut |
+|--------|-------------|--------|
+| `-t, --threads` | Threads parallèles | `1` |
 | `--timeout` | Timeout par requête (secondes) | `15` |
-| `--rate-limit` | Délai minimum entre requêtes au même domaine (secondes) | `1.0` |
+| `--rate-limit` | Délai entre requêtes au même domaine (secondes) | `1.0` |
 | `--cache` | Répertoire de cache HTML | désactivé |
-| `--json` | Export JSON additionnel avec métadonnées complètes | désactivé |
-| `--min-score` | Score de confiance minimum pour garder un email | `0.7` |
-| `--max-per-site` | Nombre max d'emails gardés par site (`0` = illimité) | `1` |
-| `--no-filter` | Désactive tous les filtres campagne B2B | `False` |
-| `--allow-free-emails` | Garde les emails free (gmail, orange, free, sfr, etc.) | `False` |
+| `--json` | Export JSON additionnel | désactivé |
+| `--min-score` | Score de confiance minimum | `0.7` |
+| `--max-per-site` | Max emails par site (`0` = illimité) | `1` |
+| `--no-filter` | Désactive les filtres campagne B2B | `False` |
+| `--allow-free-emails` | Garde les emails free (gmail, orange, etc.) | `False` |
 | `--no-robots` | Ignorer robots.txt | `False` |
-| `--dry-run` | Détecter les pages sans scraper (mode test) | `False` |
-| `--save-every` | Checkpoint brut tous les N URLs (crash recovery) | `100` |
-| `--webhook` | URL webhook de notification à la fin | désactivé |
+| `--dry-run` | Détecte les pages sans scraper (mode test) | `False` |
+| `--save-every` | Checkpoint brut tous les N URLs | `100` |
+| `--webhook` | URL webhook de notification | désactivé |
 | `--user-agent` | User-Agent personnalisé | Chrome 131 |
 | `--log-file` | Fichier de log | désactivé |
 | `-v, -vv` | Verbosité (INFO, DEBUG) | WARNING |
 
 ### Format CSV de sortie
 
+**Mode CSV :**
+
 ```csv
 url,email,source_page,confidence_score
 https://example.fr,contact@example.fr,https://example.fr/contact,0.85
 ```
 
-Par défaut, un seul email est gardé par site (le meilleur pour une campagne). Utiliser `--max-per-site 0` pour tous les garder.
+**Mode GMB (colonnes enrichies avec métadonnées business) :**
+
+```csv
+url,email,source_page,confidence_score,business_name,address,phone,rating,category
+https://cabinet-dupont.fr,contact@cabinet-dupont.fr,https://cabinet-dupont.fr/contact,0.85,Cabinet Dupont,"12 rue de Rivoli, 75001 Paris",01 42 33 44 55,4.5,Comptable
+```
+
+Par défaut, un seul email par site. `--max-per-site 0` pour tous les garder.
 
 ### Format JSON de sortie
 
@@ -160,12 +179,19 @@ email_scraper/
 ├── detector.py      # Détection des pages contact/legal/about (slugs + texte liens)
 ├── extractor.py     # Extraction emails : regex, mailto, désobfuscation, validation
 ├── scorer.py        # Score de confiance (0.0–1.0) multi-facteurs
-└── filter.py        # Filtrage campagne B2B, sélection meilleur email par site
+├── filter.py        # Filtrage campagne B2B, sélection meilleur email par site
+└── gmb.py           # Collecte URLs business via Google Places API (mode GMB)
 ```
 
 ### Pipeline de traitement
 
-Pour chaque URL du CSV :
+**Mode GMB :** Étape 0 avant le pipeline ci-dessous :
+- Géocodage de la localisation → lat/lng
+- Quadrillage en cercles (rayon 3km, chevauchement) pour dépasser le cap de 60 résultats
+- Requête Text Search API pour chaque cercle → collecte URLs + métadonnées
+- Déduplication par `place_id`
+
+**Pour chaque URL (mode CSV ou GMB) :**
 
 1. **Normalisation** — ajout `https://`, déduplication par domaine racine
 2. **Fetch homepage** — requête HTTP avec headers Chrome réalistes, vérif robots.txt, cache, retry 403 avec Referer
