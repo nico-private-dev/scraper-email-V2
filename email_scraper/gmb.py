@@ -115,7 +115,7 @@ class GMBCollector:
         max_results: int = 0,
     ) -> GMBCollectResult:
         """
-        Collect business URLs from Google Maps.
+        Collect business URLs from Google Maps (single location).
 
         Args:
             query: Search keyword (e.g., "cabinet comptable")
@@ -145,9 +145,84 @@ class GMBCollector:
         )
 
         # Step 3: Search each grid point
+        self._search_grid_points(query, grid_points, radius_km, max_results, result)
+
+        # Collect results
+        self._finalize_result(result, max_results)
+        return result
+
+    def collect_cities(
+        self,
+        query: str,
+        cities: List[Tuple[str, float, float]],
+        radius_km: float = 5.0,
+        max_results: int = 0,
+        progress_callback=None,
+    ) -> GMBCollectResult:
+        """
+        Collect business URLs across multiple cities (country-wide scan).
+
+        Iterates over a list of cities with pre-known coordinates (no geocoding
+        needed = no wasted API requests). Deduplicates by place_id across cities.
+
+        Args:
+            query: Search keyword (e.g., "agence web")
+            cities: List of (city_name, lat, lng) tuples
+            radius_km: Search radius per city in km (default: 5)
+            max_results: Max total businesses (0 = no limit, respects quota)
+            progress_callback: Optional callable(city_name, city_index, total_cities,
+                               businesses_so_far) for progress updates
+
+        Returns:
+            GMBCollectResult with collected businesses from all cities
+        """
+        result = GMBCollectResult()
+
+        for i, (city_name, lat, lng) in enumerate(cities):
+            if max_results > 0 and len(self._seen_place_ids) >= max_results:
+                logger.info("Reached max_results=%d, stopping", max_results)
+                break
+
+            try:
+                self._check_quota()
+            except QuotaExceededError as e:
+                logger.warning(str(e))
+                result.errors.append(str(e))
+                break
+
+            if progress_callback:
+                progress_callback(city_name, i, len(cities), len(self._seen_place_ids))
+
+            logger.info(
+                "Scanning %s (%d/%d) — %d businesses so far",
+                city_name, i + 1, len(cities), len(self._seen_place_ids),
+            )
+
+            grid_points = self._generate_grid(lat, lng, radius_km)
+            before = len(self._seen_place_ids)
+            self._search_grid_points(query, grid_points, radius_km, max_results, result)
+            new = len(self._seen_place_ids) - before
+
+            logger.info(
+                "  %s: +%d new businesses (total: %d, requests: %d/%d)",
+                city_name, new, len(self._seen_place_ids),
+                self.requests_used, self.max_requests,
+            )
+
+        self._finalize_result(result, max_results)
+        return result
+
+    def _search_grid_points(
+        self,
+        query: str,
+        grid_points: List[Tuple[float, float]],
+        radius_km: float,
+        max_results: int,
+        result: GMBCollectResult,
+    ):
+        """Search all grid points in a single area."""
         for i, (plat, plng) in enumerate(grid_points):
             if max_results > 0 and len(self._seen_place_ids) >= max_results:
-                logger.info("Reached max_results=%d, stopping collection", max_results)
                 break
 
             try:
@@ -165,7 +240,8 @@ class GMBCollector:
             cell_radius = min(radius_km, 5.0) * 1000  # in meters
             self._search_area(query, plat, plng, cell_radius, max_results, result)
 
-        # Collect results
+    def _finalize_result(self, result: GMBCollectResult, max_results: int):
+        """Populate result with final businesses and stats."""
         result.businesses = list(self._seen_place_ids.values())
         if max_results > 0:
             result.businesses = result.businesses[:max_results]
@@ -177,8 +253,6 @@ class GMBCollector:
             "%d API requests (~$%.2f)",
             len(result.businesses), self.requests_used, self.estimated_cost,
         )
-
-        return result
 
     def _search_area(
         self,

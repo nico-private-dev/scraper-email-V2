@@ -233,6 +233,13 @@ Examples:
         help="City or area to search (e.g., \"Paris\", \"Lyon 3ème\")",
     )
     gmb_group.add_argument(
+        "--country",
+        type=str,
+        default=None,
+        metavar="COUNTRY",
+        help="Scan an entire country city by city (e.g., \"france\", \"suisse\", \"belgique\")",
+    )
+    gmb_group.add_argument(
         "--api-key",
         type=str,
         default=None,
@@ -374,6 +381,10 @@ Examples:
 def _collect_gmb_urls(args) -> tuple:
     """Run GMB collection and return (urls, gmb_metadata).
 
+    Supports two modes:
+    - --location: single city search
+    - --country: scan all cities in a country
+
     Returns:
         Tuple of (list of URL strings, dict mapping domain to business metadata)
     """
@@ -388,29 +399,64 @@ def _collect_gmb_urls(args) -> tuple:
         )
         sys.exit(1)
 
-    # Show quota info
     max_cost = args.api_quota * COST_PER_REQUEST
-    print(f"GMB mode: searching Google Maps for \"{args.gmb}\" in \"{args.location}\"")
-    print(f"  API quota: {args.api_quota} requests (max ~${max_cost:.2f})")
-    print(f"  Search radius: {args.radius}km")
-    if args.gmb_max > 0:
-        print(f"  Max businesses: {args.gmb_max}")
-    print()
 
     collector = GMBCollector(
         api_key=api_key,
         max_requests=args.api_quota,
     )
 
-    result = collector.collect(
-        query=args.gmb,
-        location=args.location,
-        radius_km=args.radius,
-        max_results=args.gmb_max,
-    )
+    if args.country:
+        # --- Country-wide scan ---
+        from .cities import get_cities, get_country_name
+        country_name = get_country_name(args.country)
+        cities = get_cities(args.country)
+        radius = args.radius if args.radius != 10.0 else 5.0  # default 5km per city
+
+        print(f"GMB country mode: \"{args.gmb}\" across {country_name}")
+        print(f"  Cities to scan:  {len(cities)}")
+        print(f"  Radius per city: {radius}km")
+        print(f"  API quota:       {args.api_quota} requests (max ~${max_cost:.2f})")
+        if args.gmb_max > 0:
+            print(f"  Max businesses:  {args.gmb_max}")
+        print()
+
+        # Progress with tqdm
+        pbar = tqdm(total=len(cities), desc="Cities", unit="city")
+
+        def _progress(city_name, idx, total, biz_count):
+            pbar.set_postfix_str(f"{city_name} ({biz_count} biz)")
+            pbar.update(1) if idx > 0 else None
+
+        result = collector.collect_cities(
+            query=args.gmb,
+            cities=cities,
+            radius_km=radius,
+            max_results=args.gmb_max,
+            progress_callback=_progress,
+        )
+        # Final update for last city
+        pbar.update(pbar.total - pbar.n)
+        pbar.close()
+
+    else:
+        # --- Single location scan ---
+        print(f"GMB mode: searching Google Maps for \"{args.gmb}\" in \"{args.location}\"")
+        print(f"  API quota:       {args.api_quota} requests (max ~${max_cost:.2f})")
+        print(f"  Search radius:   {args.radius}km")
+        if args.gmb_max > 0:
+            print(f"  Max businesses:  {args.gmb_max}")
+        print()
+
+        result = collector.collect(
+            query=args.gmb,
+            location=args.location,
+            radius_km=args.radius,
+            max_results=args.gmb_max,
+        )
 
     # GMB summary
-    print(f"{'=' * 60}")
+    print(f"\n{'=' * 60}")
     print(f"GMB collection complete")
     print(f"{'=' * 60}")
     print(f"  Businesses found:  {len(result.businesses)} (with website)")
@@ -457,9 +503,22 @@ def main(argv: Optional[List[str]] = None):
     if not args.gmb and not args.input:
         logger.error("An input source is required: -i FILE or --gmb QUERY")
         sys.exit(1)
-    if args.gmb and not args.location:
-        logger.error("--location is required when using --gmb")
+    if args.gmb and not args.location and not args.country:
+        logger.error("--location or --country is required when using --gmb")
         sys.exit(1)
+    if args.gmb and args.location and args.country:
+        logger.error("Cannot use both --location and --country. Choose one.")
+        sys.exit(1)
+    if args.country and not args.gmb:
+        logger.error("--country requires --gmb (search query)")
+        sys.exit(1)
+    if args.country:
+        from .cities import get_cities
+        try:
+            cities = get_cities(args.country)
+        except ValueError as e:
+            logger.error(str(e))
+            sys.exit(1)
 
     # GMB mode: default to allowing free emails (small businesses often use gmail/orange)
     if args.gmb and not args.allow_free_emails:
