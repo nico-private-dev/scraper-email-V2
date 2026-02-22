@@ -189,6 +189,24 @@ def send_webhook(webhook_url: str, results: List[EmailResult], duration: float):
         logger.warning("Failed to send webhook: %s", e)
 
 
+def _load_dotenv():
+    """Load environment variables from .env file if it exists."""
+    env_path = Path(".env")
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("'\"")
+        if key and key not in os.environ:  # Don't override existing env vars
+            os.environ[key] = value
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(
@@ -490,6 +508,9 @@ def _collect_gmb_urls(args) -> tuple:
 
 def main(argv: Optional[List[str]] = None):
     """Main entry point."""
+    # Load .env file if present (for API keys, etc.)
+    _load_dotenv()
+
     parser = build_parser()
     args = parser.parse_args(argv)
 
