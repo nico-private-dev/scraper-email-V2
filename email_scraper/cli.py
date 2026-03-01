@@ -255,7 +255,7 @@ Examples:
         type=str,
         default=None,
         metavar="COUNTRY",
-        help="Scan an entire country city by city (e.g., \"france\", \"suisse\", \"belgique\")",
+        help="Scan an entire country city by city (e.g., \"france\", \"suisse\", \"belgique\", \"canada\")",
     )
     gmb_group.add_argument(
         "--api-key",

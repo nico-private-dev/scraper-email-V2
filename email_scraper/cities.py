@@ -207,6 +207,54 @@ LUXEMBOURG: List[City] = [
 ]
 
 # ============================================================
+# CANADA — Québec (toutes les villes majeures) + communautés
+#          francophones du Nouveau-Brunswick et d'Ottawa
+# ============================================================
+CANADA: List[City] = [
+    # Québec — grandes villes et agglomérations
+    ("Montréal", 45.5017, -73.5673),
+    ("Québec", 46.8139, -71.2080),
+    ("Laval", 45.5888, -73.7429),
+    ("Gatineau", 45.4765, -75.7013),
+    ("Longueuil", 45.5312, -73.5185),
+    ("Sherbrooke", 45.4042, -71.8929),
+    ("Saguenay", 48.4279, -71.0547),
+    ("Lévis", 46.8036, -71.1762),
+    ("Trois-Rivières", 46.3432, -72.5418),
+    ("Terrebonne", 45.7040, -73.6440),
+    ("Repentigny", 45.7440, -73.4603),
+    ("Saint-Jérôme", 45.7777, -74.0028),
+    ("Brossard", 45.4459, -73.4649),
+    ("Drummondville", 45.8836, -72.4831),
+    ("Saint-Jean-sur-Richelieu", 45.3069, -73.2636),
+    ("Granby", 45.4009, -72.7274),
+    ("Mirabel", 45.6500, -74.0844),
+    ("Shawinigan", 46.5651, -72.7511),
+    ("Victoriaville", 46.0563, -71.9665),
+    ("Joliette", 46.0179, -73.4487),
+    ("Saint-Hyacinthe", 45.6260, -72.9531),
+    ("Sorel-Tracy", 46.0477, -73.1092),
+    ("Salaberry-de-Valleyfield", 45.2667, -74.1333),
+    ("Rimouski", 48.4486, -68.5249),
+    ("Rouyn-Noranda", 48.2355, -79.0227),
+    ("Val-d'Or", 48.1000, -77.7833),
+    ("Thetford Mines", 46.0833, -71.3000),
+    ("Rivière-du-Loup", 47.8333, -69.5333),
+    ("Alma", 48.5500, -71.6500),
+    ("Baie-Comeau", 49.2167, -68.1500),
+    ("Sept-Îles", 50.2167, -66.3833),
+    # Nouveau-Brunswick — régions francophones (Acadie)
+    ("Moncton", 46.0878, -64.7782),
+    ("Bathurst", 47.6167, -65.6500),
+    ("Edmundston", 47.3667, -68.3333),
+    ("Campbellton", 47.9667, -66.6667),
+    ("Dieppe", 46.0833, -64.7333),
+    # Ontario — communauté francophone
+    ("Ottawa", 45.4215, -75.6972),
+    ("Sudbury", 46.4900, -80.9900),
+]
+
+# ============================================================
 # Registry + aliases
 # ============================================================
 COUNTRIES: Dict[str, List[City]] = {
@@ -214,6 +262,7 @@ COUNTRIES: Dict[str, List[City]] = {
     "suisse": SUISSE,
     "belgique": BELGIQUE,
     "luxembourg": LUXEMBOURG,
+    "canada": CANADA,
 }
 
 COUNTRY_ALIASES: Dict[str, str] = {
@@ -222,6 +271,7 @@ COUNTRY_ALIASES: Dict[str, str] = {
     "ch": "suisse",
     "be": "belgique",
     "lu": "luxembourg",
+    "ca": "canada",
     # English names
     "switzerland": "suisse",
     "belgium": "belgique",
