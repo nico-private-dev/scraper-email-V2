@@ -235,6 +235,13 @@ Examples:
         help="Input CSV file with a 'url' column",
     )
     source.add_argument(
+        "--url",
+        type=str,
+        default=None,
+        metavar="URL",
+        help="Single URL to scrape (useful for testing)",
+    )
+    source.add_argument(
         "--gmb",
         type=str,
         default=None,
@@ -518,11 +525,12 @@ def main(argv: Optional[List[str]] = None):
     setup_logging(args.verbose, args.log_file)
 
     # --- Validate input source ---
-    if args.gmb and args.input:
-        logger.error("Cannot use both -i/--input and --gmb. Choose one input source.")
+    sources = sum([bool(args.input), bool(args.gmb), bool(args.url)])
+    if sources > 1:
+        logger.error("Cannot combine -i/--input, --gmb and --url. Choose one input source.")
         sys.exit(1)
-    if not args.gmb and not args.input:
-        logger.error("An input source is required: -i FILE or --gmb QUERY")
+    if sources == 0:
+        logger.error("An input source is required: -i FILE, --url URL, or --gmb QUERY")
         sys.exit(1)
     if args.gmb and not args.location and not args.country:
         logger.error("--location or --country is required when using --gmb")
@@ -556,6 +564,9 @@ def main(argv: Optional[List[str]] = None):
         if not urls:
             save_csv([], args.output, gmb_metadata)
             return 0
+    elif args.url:
+        # Single URL mode (testing)
+        urls = [args.url]
     else:
         # CSV mode: load from file
         urls = load_urls(args.input)
